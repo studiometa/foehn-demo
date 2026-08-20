@@ -1,0 +1,37 @@
+# Dependencies
+/vendor/
+/node_modules/
+composer.lock
+
+# Generated web root
+/web/
+
+# Build output
+/dist/
+.stylelintcache
+
+# Environment
+.env
+
+# Generated secrets — .env holds the keys by default; this file is the alternative
+/config/wordpress-salts.config.php
+
+# DDEV
+#
+# Everything under .ddev/ is generated except the configuration: certificates,
+# router config, per-service overrides and image build context, all stamped
+# #ddev-generated and all specific to one machine and one project name. An
+# allowlist rather than a list of what ddev happens to write today — a stale
+# router config for a project that has been renamed is not an obvious thing to
+# debug from a CI log.
+/.ddev/*
+!/.ddev/config.yaml
+!/.ddev/docker-compose.minio.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
