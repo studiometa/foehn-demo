@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 use Demo\Settings\ThemeSettings;
 use Studiometa\Foehn\Attributes\AsSettingsPage;
-use Studiometa\Foehn\Contracts\SettingsPageInterface;
+use Studiometa\Foehn\Contracts\SettingsInterface;
 use Studiometa\Foehn\Settings\Setting;
 
 describe('ThemeSettings', function () {
-    it('implements SettingsPageInterface', function () {
-        expect(is_subclass_of(ThemeSettings::class, SettingsPageInterface::class))->toBeTrue();
+    it('implements SettingsInterface', function () {
+        expect(is_subclass_of(ThemeSettings::class, SettingsInterface::class))->toBeTrue();
     });
 
     it('has AsSettingsPage attribute with correct config', function () {
@@ -25,11 +25,13 @@ describe('ThemeSettings', function () {
         expect($attr->capability)->toBe('manage_options');
     });
 
-    it('renders its form as a Twig template, like every other view', function () {
-        $attr = new ReflectionClass(ThemeSettings::class)->getAttributes(AsSettingsPage::class)[0]->newInstance();
+    it('edits each setting with a native field', function () {
+        $settings = ThemeSettings::settings();
 
-        expect($attr->template)->toBe('settings/theme-settings');
-        expect(dirname(__DIR__, 4) . '/theme/templates/settings/theme-settings.twig')->toBeFile();
+        expect($settings['demo_contact_email']->control)->toBe('email');
+        expect($settings['demo_show_banner']->control)->toBe('checkbox');
+        expect($settings['demo_posts_per_archive']->control)->toBe('select');
+        expect($settings['demo_posts_per_archive']->options)->toBe([3 => '3', 6 => '6', 12 => '12']);
     });
 
     it('declares what it stores', function () {

@@ -14,7 +14,6 @@ declare(strict_types=1);
 
 use Studiometa\Foehn\Config\FoehnConfig;
 use Studiometa\Foehn\Contracts\ImageTransformer;
-use Studiometa\Foehn\Contracts\ViewEngineInterface;
 use Studiometa\Foehn\Discovery;
 use Studiometa\Foehn\Discovery\CliCommandDiscovery;
 use Studiometa\Foehn\Discovery\DiscoveryRunner;
@@ -377,6 +376,9 @@ $results->same(
 // its own. WP-CLI also runs with no user, and add_submenu_page() refuses a page
 // the current user cannot see — so this asks as an administrator.
 require_once ABSPATH . 'wp-admin/includes/plugin.php';
+// add_settings_field() and do_settings_sections(), which the admin loads before
+// `admin_menu`.
+require_once ABSPATH . 'wp-admin/includes/template.php';
 
 wp_set_current_user(1);
 
@@ -391,25 +393,72 @@ $results->true('the settings page is added under Appearance', in_array(
     true,
 ));
 
-// The form is a Twig template, like every other view in the theme. Rendering it
-// through the real view engine is the only way to know the template resolves
-// and its context reaches it — the unit suite renders through a fake.
-$results->true('the settings form renders from its Twig template', str_contains(
-    Kernel::get(ViewEngineInterface::class)->render('settings/theme-settings', [
-        'settings' => ['demo_contact_email' => 'hello@example.com'],
-    ]),
-    'hello@example.com',
-));
+// Føhn draws the form with add_settings_field(), and do_settings_sections() is
+// what the page prints. Drawing it here is the only way to know the fields reach
+// WordPress's own table — the unit suite draws through stubs.
+// The value is filtered, not saved: a save would empty the page cache.
+$bannerText = static fn(): string => 'A "demo" site';
+add_filter('pre_option_demo_banner_text', $bannerText);
 
-// Timber's autoescape is off, so the template escapes each value itself. A quote in
-// the banner text that reached the attribute raw would end it, and the next save
-// would store the text cut at the quote.
+ob_start();
+do_settings_sections('theme-settings');
+$settingsForm = (string) ob_get_clean();
+
+remove_filter('pre_option_demo_banner_text', $bannerText);
+
+$results->true(
+    'the settings form draws a native field for each setting',
+    str_contains($settingsForm, '<input type="email" id="demo_contact_email" name="demo_contact_email"')
+        && str_contains($settingsForm, '<select id="demo_posts_per_archive" name="demo_posts_per_archive">')
+        && str_contains($settingsForm, '<label for="demo_banner_text">Banner text</label>'),
+);
+
+// A quote in the banner text that reached the attribute raw would end it, and the
+// next save would store the text cut at the quote.
 $results->true('the settings form escapes a quote in a text value', str_contains(
-    Kernel::get(ViewEngineInterface::class)->render('settings/theme-settings', [
-        'settings' => ['demo_banner_text' => 'A "demo" site'],
-    ]),
+    $settingsForm,
     'value="A &quot;demo&quot; site"',
 ));
+
+// A Customizer section registers its settings on `init`, as a settings page does,
+// under the section id. Its controls are added on `customize_register`, which only
+// the Customizer fires: firing it here with a real manager is the only way to know
+// the section, the settings and the controls reach WordPress's own classes.
+$results->same(
+    'Customizer settings are grouped under the section id',
+    'demo_studio',
+    $registered['demo_studio_address']['group'] ?? null,
+);
+
+require_once ABSPATH . WPINC . '/class-wp-customize-manager.php';
+
+$customizer = new WP_Customize_Manager();
+do_action('customize_register', $customizer);
+
+$results->true('the Studio section is added to the Customizer', $customizer->get_section('demo_studio') !== null);
+$results->same(
+    'a Customizer control has the type of its setting',
+    'textarea',
+    $customizer->get_control('demo_studio_address')?->type,
+);
+$results->same(
+    'a field for an existing section goes in that section',
+    'title_tagline',
+    $customizer->get_control('demo_signature')?->section,
+);
+$results->same(
+    'a Customizer setting is stored as an option',
+    'option',
+    $customizer->get_setting('demo_instagram')?->type,
+);
+
+// CleanImageSizes: of the core sizes, WordPress writes only the thumbnail on upload.
+$imageSizes = get_intermediate_image_sizes();
+
+$results->true(
+    'the thumbnail is the only core image size written on upload',
+    in_array('thumbnail', $imageSizes, true) && array_intersect(['medium', 'medium_large', 'large'], $imageSizes) === [],
+);
 
 // ──────────────────────────────────────────────
 // Block bindings
@@ -478,26 +527,26 @@ if ($attachmentId > 0) {
         $uploadsBase,
     ));
 
-    // srcset builds its own URLs from the uploads base rather than from the filter
-    // above, which is why it gets asked separately: a half-rewritten srcset is the
-    // likely first bug, and it looks fine until a wide viewport asks for the 1024.
-    $srcset = wp_get_attachment_image_srcset($attachmentId, 'medium');
-    $sources = $srcset === false ? [] : explode(', ', $srcset);
+    // A sub-size builds its URL from the uploads base rather than from the filter
+    // above, which is why it gets asked separately.
+    $results->true('a generated size is served from the site itself', str_starts_with(
+        (string) wp_get_attachment_image_url($attachmentId, 'card'),
+        $uploadsBase,
+    ));
 
-    $results->same('the srcset offers every size', 4, count($sources));
-
-    $results->true(
-        'every srcset candidate is served from the site itself',
-        $sources !== [] && array_all($sources, fn(string $source): bool => str_starts_with($source, $uploadsBase)),
-    );
-
-    // #[AsImageSize] on CardImageSize registers `card` at 400x300, so its presence
-    // beside a core size is what proves a Føhn-declared size offloads like any other
-    // — the sub-sizes are written through the stream wrapper as they are generated.
+    // #[AsImageSize] on CardImageSize registers `card` at 800x600, so its presence is
+    // what proves a Føhn-declared size offloads like any other — the sub-sizes are
+    // written through the stream wrapper as they are generated. CleanImageSizes keeps
+    // the thumbnail as the only core size: Glide sizes the plates from the original.
     $metadata = wp_get_attachment_metadata($attachmentId);
     $keys = array_keys($metadata['sizes'] ?? []);
 
-    $results->containsAll('the declared image sizes were generated', ['medium', 'card'], $keys);
+    $results->containsAll('the declared image sizes were generated', ['thumbnail', 'card'], $keys);
+    $results->same(
+        'no other core size was generated',
+        [],
+        array_values(array_intersect(['medium', 'medium_large', 'large'], $keys)),
+    );
 
     $s3 = S3_Uploads\Plugin::get_instance()->s3();
     $listing = $s3->listObjectsV2(['Bucket' => S3_UPLOADS_BUCKET, 'Prefix' => 'uploads/']);
